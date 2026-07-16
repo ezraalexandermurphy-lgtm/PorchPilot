@@ -15,6 +15,14 @@ export const STORAGE_KEYS = {
 
 export const API_BASE_URL = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:3001/api';
 
+export const REDIRECT_URI = process.env.EXPO_PUBLIC_REDIRECT_URI || 'porchpilot://oauth/callback';
+
+export const GOOGLE_AUTH_SCOPES = [
+  'https://www.googleapis.com/auth/gmail.readonly',
+  'https://www.googleapis.com/auth/userinfo.email',
+  'https://www.googleapis.com/auth/userinfo.profile',
+];
+
 export const ORDER_STATUS_LABELS: Record<string, string> = {
   shipped: 'Shipped',
   in_transit: 'In Transit',

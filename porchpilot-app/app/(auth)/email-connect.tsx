@@ -1,45 +1,142 @@
-import { useState } from 'react';
-import { View, Text, TextInput, StyleSheet, TouchableOpacity, KeyboardAvoidingView, Platform, Alert } from 'react-native';
+import { useState, useCallback } from 'react';
+import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, Alert } from 'react-native';
 import { useRouter } from 'expo-router';
+import * as WebBrowser from 'expo-web-browser';
 import { colors, typography, spacing, borderRadius } from '../../src/theme';
+import { useAuth } from '../../src/hooks/useAuth';
+import { getOrCreateUserId } from '../../src/services/storage';
+import { apiClient } from '../../src/api';
 
 type ProviderType = 'gmail' | 'outlook';
 
 export default function EmailConnectScreen() {
   const router = useRouter();
-  const [email, setEmail] = useState('');
+  const { isConnecting, error, startGoogleOAuth, completeGoogleOAuth } = useAuth();
   const [selectedProvider, setSelectedProvider] = useState<ProviderType | null>(null);
+  const [connectingProvider, setConnectingProvider] = useState<ProviderType | null>(null);
 
-  const handleConnect = () => {
-    if (!email.trim()) {
-      Alert.alert('Email Required', 'Please enter your email address to continue.');
-      return;
-    }
-    if (!email.includes('@')) {
-      Alert.alert('Invalid Email', 'Please enter a valid email address.');
-      return;
+  /**
+   * Handle connecting with Gmail via OAuth.
+   *
+   * Flow:
+   * 1. Get the OAuth URL from the backend
+   * 2. Open it in the system browser via WebBrowser.openAuthSessionAsync
+   * 3. The backend handles the Google OAuth callback and returns a JWT
+   * 4. After the browser closes, verify the connection by checking stored tokens
+   */
+  const handleGoogleConnect = useCallback(async () => {
+    setConnectingProvider('gmail');
+
+    try {
+      // Step 1: Get OAuth URL from backend
+      const userId = await getOrCreateUserId();
+      const urlResponse = await apiClient.getGoogleOAuthUrl(userId);
+
+      if (!urlResponse.success || !urlResponse.data?.url) {
+        Alert.alert('Error', urlResponse.error || 'Failed to initialize Google sign-in');
+        setConnectingProvider(null);
+        return;
+      }
+
+      // Step 2: Open OAuth URL in browser
+      // The backend's redirect URI is configured to its own /google/callback endpoint.
+      // After successful auth, the backend stores the tokens and returns JSON with JWT.
+      const result = await WebBrowser.openAuthSessionAsync(
+        urlResponse.data.url,
+        // Use the backend's callback URL as the return URL so the session
+        // captures the redirect back to our backend
+      );
+
+      // Step 3: Handle the result
+      if (result.type === 'success') {
+        // The browser completed — the backend handled the OAuth callback
+        // and stored the token. Check if we can now authenticate.
+        // Note: For production, the backend should redirect to a deep link
+        // (e.g., porchpilot://oauth/callback) with the token in the URL.
+        // For now, we attempt to verify the connection succeeded.
+
+        // Try to fetch orders to verify the connection worked
+        const ordersResponse = await apiClient.getOrders();
+        if (ordersResponse.success) {
+          Alert.alert(
+            'Connected!',
+            'Your Gmail account has been connected. We\'ll start tracking your deliveries.',
+            [{ text: 'Go to Dashboard', onPress: () => router.replace('/(tabs)/dashboard') }]
+          );
+        } else {
+          // Token may not be stored yet — check the callback URL for params
+          const callbackUrl = result.url;
+          if (callbackUrl) {
+            // Try to extract code and state from the callback URL
+            const urlObj = new URL(callbackUrl);
+            const code = urlObj.searchParams.get('code');
+            const state = urlObj.searchParams.get('state');
+
+            if (code && state) {
+              const success = await completeGoogleOAuth(code, state);
+              if (success) {
+                Alert.alert(
+                  'Connected!',
+                  'Your Gmail account has been connected.',
+                  [{ text: 'Go to Dashboard', onPress: () => router.replace('/(tabs)/dashboard') }]
+                );
+                setConnectingProvider(null);
+                return;
+              }
+            }
+          }
+          // Fallback: ask user to check
+          Alert.alert(
+            'Connection Pending',
+            'Please check if the authorization completed in your browser. Try syncing from the dashboard.',
+            [{ text: 'Go to Dashboard', onPress: () => router.replace('/(tabs)/dashboard') }]
+          );
+        }
+      } else if (result.type === 'cancel') {
+        // User cancelled the flow
+        setConnectingProvider(null);
+      } else if (result.type === 'dismiss') {
+        setConnectingProvider(null);
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Connection failed';
+      Alert.alert('Error', message);
     }
 
-    // TODO: Implement actual OAuth flow with backend
-    // For now, navigate to dashboard as demo
+    setConnectingProvider(null);
+  }, [completeGoogleOAuth, router]);
+
+  /**
+   * Handle Outlook connection (not yet implemented).
+   */
+  const handleOutlookConnect = useCallback(() => {
+    setConnectingProvider('outlook');
     Alert.alert(
       'Coming Soon',
-      'Full email integration is under development. For now, you can explore the demo dashboard.',
+      'Outlook/Office 365 email connection is coming soon. In the meantime, try connecting with Gmail or skip to explore the demo.',
       [
-        { text: 'Go to Dashboard', onPress: () => router.replace('/(tabs)/dashboard') },
-        { text: 'Cancel', style: 'cancel' },
+        { text: 'OK', onPress: () => setConnectingProvider(null) },
       ]
     );
+  }, []);
+
+  const handleConnect = () => {
+    if (selectedProvider === 'gmail') {
+      handleGoogleConnect();
+    } else if (selectedProvider === 'outlook') {
+      handleOutlookConnect();
+    } else {
+      Alert.alert('Select Provider', 'Please select an email provider to continue.');
+    }
   };
 
+  const isInProgress = connectingProvider !== null;
+
   return (
-    <KeyboardAvoidingView
-      style={styles.container}
-      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-    >
+    <View style={styles.container}>
       <View style={styles.content}>
         {/* Back button */}
-        <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
+        <TouchableOpacity style={styles.backButton} onPress={() => router.back()} disabled={isInProgress}>
           <Text style={styles.backText}>← Back</Text>
         </TouchableOpacity>
 
@@ -58,6 +155,7 @@ export default function EmailConnectScreen() {
               selectedProvider === 'gmail' && styles.providerCardSelected,
             ]}
             onPress={() => setSelectedProvider('gmail')}
+            disabled={isInProgress}
           >
             <Text style={styles.providerIcon}>📧</Text>
             <Text style={[
@@ -74,6 +172,7 @@ export default function EmailConnectScreen() {
               selectedProvider === 'outlook' && styles.providerCardSelected,
             ]}
             onPress={() => setSelectedProvider('outlook')}
+            disabled={isInProgress}
           >
             <Text style={styles.providerIcon}>💼</Text>
             <Text style={[
@@ -85,44 +184,63 @@ export default function EmailConnectScreen() {
           </TouchableOpacity>
         </View>
 
-        {/* Email input */}
-        <Text style={styles.sectionLabel}>Or enter manually</Text>
-        <TextInput
-          style={styles.emailInput}
-          placeholder="you@example.com"
-          placeholderTextColor={colors.neutral[500]}
-          value={email}
-          onChangeText={setEmail}
-          keyboardType="email-address"
-          autoCapitalize="none"
-          autoCorrect={false}
-        />
+        {/* Manual email input - shown for reference */}
+        <Text style={styles.sectionLabel}>Connected Email</Text>
+        <View style={styles.emailInputContainer}>
+          <Text style={styles.emailPlaceholder}>
+            {selectedProvider === 'gmail'
+              ? 'Your Gmail address (set via OAuth)'
+              : selectedProvider === 'outlook'
+              ? 'Your Outlook address (set via OAuth)'
+              : 'Select a provider above'}
+          </Text>
+        </View>
 
         {/* Privacy note */}
         <Text style={styles.privacyNote}>
           🔒 We only read shipping confirmation emails. Your data is encrypted and never shared.
         </Text>
 
+        {/* Error display */}
+        {error && (
+          <View style={styles.errorBox}>
+            <Text style={styles.errorText}>{error}</Text>
+          </View>
+        )}
+
         {/* Connect button */}
         <TouchableOpacity
-          style={styles.connectButton}
+          style={[styles.connectButton, isInProgress && styles.connectButtonDisabled]}
           activeOpacity={0.8}
           onPress={handleConnect}
+          disabled={isInProgress}
         >
-          <Text style={styles.connectText}>
-            {selectedProvider ? `Connect with ${selectedProvider === 'gmail' ? 'Gmail' : 'Outlook'}` : 'Connect Email'}
-          </Text>
+          {isInProgress ? (
+            <View style={styles.connectingRow}>
+              <ActivityIndicator color={colors.text.inverse} size="small" />
+              <Text style={styles.connectText}>
+                {' '}Connecting {connectingProvider === 'gmail' ? 'Gmail' : 'Outlook'}...
+              </Text>
+            </View>
+          ) : (
+            <Text style={styles.connectText}>
+              {selectedProvider
+                ? `Connect with ${selectedProvider === 'gmail' ? 'Gmail' : 'Outlook'}`
+                : 'Select a Provider'}
+            </Text>
+          )}
         </TouchableOpacity>
 
         {/* Skip */}
         <TouchableOpacity
           style={styles.skipButton}
           onPress={() => router.replace('/(tabs)/dashboard')}
+          disabled={isInProgress}
         >
           <Text style={styles.skipText}>Skip for now — try the demo</Text>
         </TouchableOpacity>
       </View>
-    </KeyboardAvoidingView>
+    </View>
   );
 }
 
@@ -195,16 +313,18 @@ const styles = StyleSheet.create({
   providerLabelSelected: {
     color: colors.primary[500],
   },
-  emailInput: {
+  emailInputContainer: {
     borderWidth: 1,
     borderColor: colors.border.light,
     borderRadius: borderRadius.lg,
     paddingVertical: spacing.lg,
     paddingHorizontal: spacing.lg,
-    fontSize: typography.fontSize.md,
-    color: colors.text.primary,
     backgroundColor: colors.background.secondary,
     marginBottom: spacing.lg,
+  },
+  emailPlaceholder: {
+    fontSize: typography.fontSize.md,
+    color: colors.neutral[500],
   },
   privacyNote: {
     fontSize: typography.fontSize.xs,
@@ -212,6 +332,19 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     marginBottom: spacing['2xl'],
     lineHeight: typography.fontSize.xs * typography.lineHeight.normal,
+  },
+  errorBox: {
+    backgroundColor: '#FEF2F2',
+    borderWidth: 1,
+    borderColor: '#FECACA',
+    borderRadius: borderRadius.md,
+    padding: spacing.md,
+    marginBottom: spacing.lg,
+  },
+  errorText: {
+    color: colors.text.error,
+    fontSize: typography.fontSize.sm,
+    textAlign: 'center',
   },
   connectButton: {
     backgroundColor: colors.primary[500],
@@ -224,10 +357,18 @@ const styles = StyleSheet.create({
     shadowRadius: 8,
     elevation: 4,
   },
+  connectButtonDisabled: {
+    opacity: 0.7,
+  },
   connectText: {
     color: colors.text.inverse,
     fontSize: typography.fontSize.md,
     fontWeight: typography.fontWeight.bold,
+  },
+  connectingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   skipButton: {
     marginTop: spacing.xl,
