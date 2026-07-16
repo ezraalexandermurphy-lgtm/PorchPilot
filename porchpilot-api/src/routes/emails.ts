@@ -1,13 +1,16 @@
 import type { FastifyInstance } from 'fastify';
 import type { FastifyRequest } from 'fastify';
-import { syncEmails } from '../services/gmail.js';
+import { syncEmails as syncGmail } from '../services/gmail.js';
+import { syncEmails as syncOutlook } from '../services/outlook.js';
 import { query } from '../db/pool.js';
 
 export async function emailRoutes(app: FastifyInstance) {
   /**
    * POST /api/emails/sync
-   * Triggers a sync of the user's connected Gmail inbox.
+   * Triggers a sync of the user's connected inbox.
+   * Supports both Google and Microsoft providers.
    * Requires a valid JWT token in the Authorization header.
+   * Optional query param: provider (google|microsoft) — syncs first of that type if omitted.
    */
   app.post('/sync', async (request: FastifyRequest, reply) => {
     try {
@@ -24,29 +27,51 @@ export async function emailRoutes(app: FastifyInstance) {
         authHeader.substring(7),
       );
 
-      // Find the user's active Google email account
+      const { provider } = request.query as { provider?: string };
+      const validProviders = ['google', 'microsoft'];
+
+      // If provider specified, use it; otherwise find first active account
+      let providerFilter = '';
+      const params: unknown[] = [decoded.userId];
+
+      if (provider && validProviders.includes(provider)) {
+        providerFilter = ` AND provider = $2`;
+        params.push(provider);
+      }
+
       const { rows: accounts } = await query(
-        `SELECT id FROM email_accounts
-         WHERE user_id = $1 AND provider = 'google' AND is_active = true
+        `SELECT id, provider FROM email_accounts
+         WHERE user_id = $1 AND is_active = true${providerFilter}
+         ORDER BY last_synced_at ASC NULLS FIRST
          LIMIT 1`,
-        [decoded.userId],
+        params,
       );
 
       if (accounts.length === 0) {
+        const msg = provider
+          ? `No connected ${provider} account found. Please connect via OAuth first.`
+          : 'No connected email account found. Please connect via OAuth first.';
         return reply.status(400).send({
           success: false,
-          error: 'No connected Gmail account found. Please connect via OAuth first.',
+          error: msg,
         });
       }
 
       const emailAccountId = accounts[0].id;
+      const accountProvider = accounts[0].provider as string;
 
-      // Run the sync
-      const result = await syncEmails(emailAccountId, decoded.userId);
+      // Route to the correct sync service
+      let result: { processed: number; ordersCreated: number; errors: string[] };
+      if (accountProvider === 'google') {
+        result = await syncGmail(emailAccountId, decoded.userId);
+      } else {
+        result = await syncOutlook(emailAccountId, decoded.userId);
+      }
 
       reply.send({
         success: true,
         data: {
+          provider: accountProvider,
           processed: result.processed,
           ordersCreated: result.ordersCreated,
           errors: result.errors.length > 0 ? result.errors : undefined,
