@@ -1,10 +1,12 @@
 import Fastify, { type FastifyError } from 'fastify';
+import fjwt from '@fastify/jwt';
 import cors from '@fastify/cors';
 import helmet from '@fastify/helmet';
 import rateLimit from '@fastify/rate-limit';
 import { config } from './config/env.js';
 import { healthRoutes } from './routes/health.js';
 import { authRoutes } from './routes/auth.js';
+import { emailRoutes } from './routes/emails.js';
 
 export async function buildApp() {
   const app = Fastify({
@@ -22,9 +24,15 @@ export async function buildApp() {
     timeWindow: config.rateLimit.windowMs,
   });
 
+  // JWT for session tokens
+  await app.register(fjwt, {
+    secret: config.jwtSecret,
+  });
+
   // ─── Routes ───────────────────────────────────────────────────────────
   await app.register(healthRoutes, { prefix: '/api/health' });
   await app.register(authRoutes, { prefix: '/api/auth' });
+  await app.register(emailRoutes, { prefix: '/api/emails' });
 
   // ─── Global error handler ─────────────────────────────────────────────
   app.setErrorHandler((error: FastifyError, _request, reply) => {
