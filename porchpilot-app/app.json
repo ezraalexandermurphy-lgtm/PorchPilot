@@ -1,0 +1,40 @@
+{
+  "expo": {
+    "name": "PorchPilot",
+    "slug": "porchpilot",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "scheme": "porchpilot",
+    "splash": {
+      "backgroundColor": "#1A3A5C",
+      "resizeMode": "contain"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.porchpilot.app",
+      "infoPlist": {
+        "NSCalendarsUsageDescription": "PorchPilot needs access to your calendar to add delivery reminders.",
+        "NSRemindersUsageDescription": "PorchPilot needs access to reminders for delivery alerts."
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#1A3A5C"
+      },
+      "package": "com.porchpilot.app",
+      "permissions": [
+        "READ_CALENDAR",
+        "WRITE_CALENDAR"
+      ]
+    },
+    "web": {
+      "favicon": "./assets/favicon.png",
+      "bundler": "metro"
+    },
+    "plugins": [
+      "expo-router"
+    ]
+  }
+}
